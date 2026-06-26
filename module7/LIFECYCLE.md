@@ -217,4 +217,101 @@ def handle_sigterm(signum, frame):
 signal.signal(signal.SIGTERM, handle_sigterm)
 ```
 
+---
 
+## 4. Логи контейнера
+
+### Перегляд логів
+
+```bash
+docker logs lifecycle-demo
+```
+
+**Вивід:**
+```
+[START] Server listening on port 8080
+[HTTP] 172.17.0.1 - "GET / HTTP/1.1" 200 -
+[REQUEST] GET / from 172.17.0.1
+[SIGNAL] Received SIGTERM — shutting down gracefully
+```
+
+### Потокові логи (реального часу)
+
+```bash
+docker logs -f lifecycle-demo
+```
+
+### Логи з мітками часу
+
+```bash
+docker logs --timestamps lifecycle-demo
+```
+
+**Вивід:**
+```
+2026-06-26T10:15:00.123Z [START] Server listening on port 8080
+2026-06-26T10:16:34.456Z [HTTP] 172.17.0.1 - "GET / HTTP/1.1" 200 -
+2026-06-26T10:20:01.789Z [SIGNAL] Received SIGTERM — shutting down gracefully
+```
+
+---
+
+### Звідки беруться логи?
+
+```
+Процес у контейнері
+    │
+    ├─► stdout  ──┐
+    │             ├──► Docker daemon перехоплює потоки
+    └─► stderr  ──┘         │
+                            ▼
+                   /var/lib/docker/containers/
+                   <container-id>/
+                   └── <container-id>-json.log
+                            │
+                            ▼
+                   docker logs читає цей файл
+```
+
+**Механізм:**
+- Docker daemon перехоплює **stdout** і **stderr** PID 1.
+- Записує рядки у JSON-файл на хості (`json-file` — драйвер за замовчуванням).
+- `docker logs` читає цей файл і виводить на екран.
+
+**Саме тому важливо:**
+- писати логи у **stdout/stderr**, а не у файли всередині контейнера;
+- використовувати `flush=True` у Python (або `-u` прапор), щоб рядки не буферизувались і одразу потрапляли до Docker.
+
+---
+
+## Підсумок: що визначає життя контейнера
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        КОНТЕЙНЕР                            │
+│                                                             │
+│  PID 1 (python3 server.py)  ←── головний процес            │
+│       │                                                     │
+│       │  живий → контейнер живий                           │
+│       │  завершився → контейнер зупинений                  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| Питання | Відповідь |
+|---|---|
+| **Що визначає життя контейнера?** | Стан PID 1. Поки PID 1 живий — контейнер живий. |
+| **Чому він завершився?** | Отримав `SIGTERM` від `docker stop` і викликав `sys.exit(0)`. |
+| **Що таке PID 1 тут?** | `python3 server.py` — exec-форма CMD запускає його напряму, без shell. |
+| **Звідки логи?** | Docker перехоплює stdout/stderr PID 1 і пише у JSON-файл на хості. |
+| **Що якби SIGTERM ігнорувався?** | Docker надіслав би SIGKILL через 10 секунд — примусове вбивство. |
+
+---
+
+## Файли проєкту
+
+| Файл | Призначення |
+|---|---|
+| `app/server.py` | Python HTTP-сервер з обробкою SIGTERM |
+| `app/Dockerfile` | Образ контейнера (exec-форма CMD) |
+| `LIFECYCLE.md` | Цей звіт |
